@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Трансформатор Отзывов DDX</title>
+    <!-- Tailwind CSS для стилей -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React для интерфейса -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.6/babel.min.js"></script>
+    <!-- PapaParse для работы с CSV -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <!-- Иконки -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-50 text-gray-800 font-sans min-h-screen">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useRef } = React;
+
+        const months = {
+            'января': '01', 'февраля': '02', 'марта': '03', 'апреля': '04',
+            'мая': '05', 'июня': '06', 'июля': '07', 'августа': '08',
+            'сентября': '09', 'октября': '10', 'ноября': '11', 'декабря': '12'
+        };
+
+        const parseDate = (dateStr) => {
+            if (!dateStr) return '';
+            const parts = String(dateStr).trim().split(/\s+/);
+            if (parts.length >= 2) {
+                let d = parseInt(parts[0], 10);
+                let m = months[parts[1].toLowerCase()] || '01';
+                let y = parts.length >= 3 ? parts[2] : '2026';
+                let dStr = d < 10 ? '0' + d : '' + d;
+                return `${dStr}.${m}.${y}`;
+            }
+            return dateStr;
+        };
+
+        const formatRating = (rating) => {
+            if (!rating) return '';
+            let num = parseFloat(String(rating).replace(',', '.'));
+            if (isNaN(num)) return String(rating);
+            return num.toFixed(2).replace('.', ',');
+        };
+
+        function App() {
+            const [file, setFile] = useState(null);
+            const [clubName, setClubName] = useState('');
+            const [source, setSource] = useState('Яндекс');
+            const [encoding, setEncoding] = useState('utf-8');
+            const [isProcessing, setIsProcessing] = useState(false);
+            const [message, setMessage] = useState('');
+            const fileInputRef = useRef(null);
+
+            const handleFileChange = (e) => {
+                const selected = e.target.files[0];
+                if (selected) {
+                    setFile(selected);
+                    setMessage('');
+                    // Пытаемся угадать название из имени файла
+                    let guessedName = selected.name
+                        .replace('.csv', '')
+                        .replace(/_/g, ' ')
+                        .replace('YANDEXMAP', '')
+                        .trim();
+                    setClubName(`DDX Fitness, фитнес-клуб, ${guessedName}`);
+                }
+            };
+
+            const processFile = () => {
+            if (!file) {
+                setMessage({ type: 'error', text: 'Пожалуйста, выберите файл.' });
+                return;
+            }
+            setIsProcessing(true);
+            setMessage('');
+
+            Papa.parse(file, {
+                header: true,
+                skipEmptyLines: true,
+                encoding: encoding,
+                transformHeader: function(h) {
+                    return h.replace(/^\uFEFF/, '').trim(); // Удаляем скрытый символ BOM
+                },
+                complete: function(results) {
+                    try {
+                        const data = results.data;
+                        
+                        // Проверяем, правильные ли колонки мы прочитали
+                        if (data.length > 0 && !('Имя' in data[0]) && !('Отзыв' in data[0])) {
+                            // Возможно, разделитель не точка с запятой. Пробуем перепарсить
+                            Papa.parse(file, {
+                                header: true,
+                                skipEmptyLines: true,
+                                encoding: encoding,
+                                delimiter: ';',
+                                transformHeader: function(h) {
+                                    return h.replace(/^\uFEFF/, '').trim();
+                                },
+                                complete: (retryResults) => handleData(retryResults.data)
+                            });
+                        } else {
+                            handleData(data);
+                        }
+                    } catch (err) {
+                        setMessage({ type: 'error', text: 'Ошибка обработки: ' + err.message });
+                        setIsProcessing(false);
+                    }
+                },
+                error: function(err) {
+                    setMessage({ type: 'error', text: 'Ошибка чтения файла: ' + err.message });
+                    setIsProcessing(false);
+                }
+            });
+        };
+
+        const handleData = (data) => {
+            if (!data || data.length === 0) {
+                setMessage({ type: 'error', text: 'Файл пуст или не удалось распознать данные. Проверьте формат файла.' });
+                setIsProcessing(false);
+                return;
+            }
+
+            // Ищем ключи гибко, на случай непредсказуемых форматов
+            const firstRow = data[0];
+            const authorKey = 'Имя' in firstRow ? 'Имя' : ('Автор' in firstRow ? 'Автор' : Object.keys(firstRow)[0]);
+            const dateKey = 'Дата' in firstRow ? 'Дата' : ('Время' in firstRow ? 'Время' : Object.keys(firstRow)[1]);
+            const ratingKey = 'Оценка' in firstRow ? 'Оценка' : ('Рейтинг' in firstRow ? 'Рейтинг' : Object.keys(firstRow)[2]);
+            const textKey = 'Отзыв' in firstRow ? 'Отзыв' : ('Текст' in firstRow ? 'Текст' : Object.keys(firstRow)[3]);
+
+            const transformed = data.map(row => ({
+                'ВРЕМЯ': parseDate(row[dateKey]),
+                'ИМЯ КЛУБА': clubName,
+                'РЕЙТИНГ': formatRating(row[ratingKey]),
+                'ИСТОЧНИК': source,
+                'АВТОР': row[authorKey],
+                'ТЕКСТ': row[textKey]
+            }));
+
+            // Конвертируем обратно в CSV
+            const csvOutput = Papa.unparse(transformed, {
+                    delimiter: ",", // Стандартный CSV-разделитель (запятая) для главного реестра
+                    quotes: true    // Всегда оборачиваем текст в кавычки для надежности
+                });
+
+                // Добавляем BOM (\uFEFF) чтобы Excel корректно понимал кириллицу (UTF-8)
+                const blob = new Blob(["\uFEFF" + csvOutput], { type: "text/csv;charset=utf-8;" });
+                const url = URL.createObjectURL(blob);
+                
+                const link = document.createElement("a");
+                link.href = url;
+                link.setAttribute("download", `Трансформирован_${file.name}`);
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+
+                setIsProcessing(false);
+                setMessage({ type: 'success', text: 'Файл успешно обработан и скачан!' });
+            };
+
+            return (
+                <div className="max-w-3xl mx-auto py-12 px-4 sm:px-6 lg:px-8">
+                    <div className="bg-white rounded-2xl shadow-xl overflow-hidden">
+                        <div className="bg-blue-600 px-6 py-4">
+                            <h1 className="text-2xl font-bold text-white flex items-center">
+                                <i className="fas fa-file-csv mr-3"></i>
+                                Трансформатор Отзывов в Формат Реестра
+                            </h1>
+                        </div>
+                        
+                        <div className="p-8 space-y-6">
+                            {/* Блок загрузки файла */}
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-2">1. Загрузите исходный CSV файл</label>
+                                <div 
+                                    className="border-2 border-dashed border-gray-300 rounded-lg p-6 flex justify-center items-center hover:bg-gray-50 transition cursor-pointer"
+                                    onClick={() => fileInputRef.current.click()}
+                                >
+                                    <div className="text-center">
+                                        <i className="fas fa-cloud-upload-alt text-4xl text-blue-500 mb-2"></i>
+                                        <p className="text-sm text-gray-600">
+                                            {file ? <span className="font-semibold text-blue-600">{file.name}</span> : "Нажмите, чтобы выбрать CSV файл"}
+                                        </p>
+                                    </div>
+                                    <input 
+                                        type="file" 
+                                        accept=".csv" 
+                                        className="hidden" 
+                                        ref={fileInputRef}
+                                        onChange={handleFileChange}
+                                    />
+                                </div>
+                            </div>
+
+                            {/* Настройки */}
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <div className="md:col-span-2">
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">2. Уточните название клуба (пойдет во все строки)</label>
+                                    <input 
+                                        type="text" 
+                                        value={clubName}
+                                        onChange={(e) => setClubName(e.target.value)}
+                                        className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                                        placeholder="Например: DDX Fitness, фитнес-клуб, Гражданский проспект, 41"
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">3. Источник отзывов</label>
+                                    <select 
+                                        value={source}
+                                        onChange={(e) => setSource(e.target.value)}
+                                        className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                                    >
+                                        <option value="Яндекс">Яндекс Карты</option>
+                                        <option value="2ГИС">2ГИС</option>
+                                        <option value="Google">Google Карты</option>
+                                        <option value="Телеграм">Телеграм</option>
+                                    </select>
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">Кодировка файла (если кракозябры)</label>
+                                    <select 
+                                        value={encoding}
+                                        onChange={(e) => setEncoding(e.target.value)}
+                                        className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                                    >
+                                        <option value="utf-8">UTF-8 (Стандарт)</option>
+                                        <option value="windows-1251">Windows-1251 (Старый Excel)</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            {message && (
+                                <div className={`p-4 rounded-lg flex items-center ${message.type === 'error' ? 'bg-red-50 text-red-700' : 'bg-green-50 text-green-700'}`}>
+                                    <i className={`fas ${message.type === 'error' ? 'fa-exclamation-circle' : 'fa-check-circle'} mr-2`}></i>
+                                    {message.text}
+                                </div>
+                            )}
+
+                            <button 
+                                onClick={processFile}
+                                disabled={!file || isProcessing}
+                                className={`w-full py-3 px-4 text-white font-bold rounded-lg shadow-md transition-colors flex justify-center items-center ${!file || isProcessing ? 'bg-blue-300 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}
+                            >
+                                {isProcessing ? (
+                                    <><i className="fas fa-spinner fa-spin mr-2"></i> Обработка...</>
+                                ) : (
+                                    <><i className="fas fa-download mr-2"></i> Трансформировать и Скачать</>
+                                )}
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <p className="text-center text-gray-500 mt-6 text-sm">
+                        Разработано Атлантидой. Файлы обрабатываются локально в вашем браузере.
+                    </p>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
