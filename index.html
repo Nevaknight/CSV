@@ -1,271 +1,335 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Трансформатор Отзывов DDX</title>
-    <!-- Tailwind CSS для стилей -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <!-- React для интерфейса -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.6/babel.min.js"></script>
-    <!-- PapaParse для работы с CSV -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
-    <!-- Иконки -->
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Конвертер отзывов Яндекс Карт → дельта</title>
+<style>
+  :root{
+    --bg:#171a1e; --panel:#1f242a; --panel2:#242a31; --line:#323a43;
+    --text:#e8ebee; --dim:#8b959f; --accent:#ff7a2f; --accent-dim:#b8551c;
+    --ok:#5fbf77; --warn:#e0b341; --err:#e06c5a;
+    --mono:'Consolas','SF Mono','Menlo',monospace;
+  }
+  *{box-sizing:border-box; margin:0; padding:0}
+  body{
+    background:var(--bg); color:var(--text);
+    font:15px/1.5 system-ui,'Segoe UI',Roboto,sans-serif;
+    min-height:100vh; padding:32px 16px;
+  }
+  .wrap{max-width:860px; margin:0 auto}
+  header{margin-bottom:28px}
+  .eyebrow{font-family:var(--mono); font-size:12px; letter-spacing:.14em; color:var(--accent); text-transform:uppercase}
+  h1{font-size:26px; font-weight:650; margin-top:6px}
+  .sub{color:var(--dim); margin-top:6px; max-width:60ch}
+
+  /* лента этапов конвейера */
+  .pipeline{display:flex; align-items:stretch; gap:0; margin:26px 0 18px; font-family:var(--mono); font-size:12px}
+  .stage{flex:1; background:var(--panel); border:1px solid var(--line); padding:10px 14px; position:relative}
+  .stage+.stage{margin-left:22px}
+  .stage+.stage::before{
+    content:"→"; position:absolute; left:-19px; top:50%; transform:translateY(-50%);
+    color:var(--dim); font-size:15px;
+  }
+  .stage .lbl{color:var(--dim); text-transform:uppercase; letter-spacing:.1em; font-size:10px}
+  .stage .val{font-size:20px; margin-top:2px; color:var(--text)}
+  .stage.lit .val{color:var(--accent)}
+
+  .card{background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:18px 20px; margin-bottom:14px}
+  .card h2{font-size:14px; font-weight:600; display:flex; align-items:center; gap:10px}
+  .num{
+    font-family:var(--mono); font-size:11px; color:var(--accent);
+    border:1px solid var(--accent-dim); border-radius:4px; padding:1px 7px;
+  }
+  .hint{color:var(--dim); font-size:13px; margin:6px 0 12px}
+  .drop{
+    border:1.5px dashed var(--line); border-radius:6px; background:var(--panel2);
+    padding:16px; text-align:center; color:var(--dim); cursor:pointer; font-size:14px;
+    transition:border-color .15s,color .15s;
+  }
+  .drop:hover,.drop.over{border-color:var(--accent); color:var(--text)}
+  .drop.done{border-style:solid; border-color:var(--ok); color:var(--ok)}
+  .drop input{display:none}
+  .filelist{font-family:var(--mono); font-size:12px; color:var(--dim); margin-top:8px; max-height:96px; overflow:auto}
+
+  .runrow{display:flex; gap:12px; align-items:center; margin:20px 0}
+  button.run{
+    background:var(--accent); color:#141414; border:0; border-radius:6px;
+    font:600 15px system-ui; padding:12px 26px; cursor:pointer;
+  }
+  button.run:hover{filter:brightness(1.08)}
+  button.run:disabled{background:var(--line); color:var(--dim); cursor:not-allowed}
+  .runnote{color:var(--dim); font-size:13px}
+
+  .log{
+    font-family:var(--mono); font-size:12.5px; line-height:1.7;
+    background:var(--panel2); border:1px solid var(--line); border-radius:6px;
+    padding:14px 16px; white-space:pre-wrap; display:none; max-height:260px; overflow:auto;
+  }
+  .log .ok{color:var(--ok)} .log .warn{color:var(--warn)} .log .err{color:var(--err)}
+
+  .downloads{display:none; gap:12px; margin-top:14px}
+  .downloads a{
+    flex:1; text-align:center; text-decoration:none; border-radius:6px; padding:12px;
+    font-weight:600; font-size:14px;
+  }
+  .dl-delta{background:var(--ok); color:#10140f}
+  .dl-mem{background:transparent; color:var(--text); border:1px solid var(--line)}
+  .dl-mem:hover{border-color:var(--dim)}
+  .memnote{display:none; color:var(--warn); font-size:13px; margin-top:10px}
+</style>
 </head>
-<body class="bg-gray-50 text-gray-800 font-sans min-h-screen">
-    <div id="root"></div>
+<body>
+<div class="wrap">
+  <header>
+    <div class="eyebrow">DDX · аналитика отзывов</div>
+    <h1>Конвертер Яндекс Карт → дельта для таблицы</h1>
+    <p class="sub">Работает целиком в браузере, данные никуда не отправляются. Повторная обработка одних и тех же файлов безопасна: дубли отсекаются по файлу памяти.</p>
+  </header>
 
-    <script type="text/babel">
-        const { useState, useRef } = React;
+  <div class="pipeline">
+    <div class="stage" id="st-raw"><div class="lbl">Сырых отзывов</div><div class="val">—</div></div>
+    <div class="stage" id="st-new"><div class="lbl">Новых</div><div class="val">—</div></div>
+    <div class="stage" id="st-dup"><div class="lbl">Дублей отсечено</div><div class="val">—</div></div>
+    <div class="stage" id="st-old"><div class="lbl">Старше 2025</div><div class="val">—</div></div>
+  </div>
 
-        const months = {
-            'января': '01', 'февраля': '02', 'марта': '03', 'апреля': '04',
-            'мая': '05', 'июня': '06', 'июля': '07', 'августа': '08',
-            'сентября': '09', 'октября': '10', 'ноября': '11', 'декабря': '12'
-        };
+  <div class="card">
+    <h2><span class="num">1</span> Справочник клубов</h2>
+    <p class="hint">Экспорт таблицы clubs в CSV. Клубы сопоставляются по колонке yandex_org_id.</p>
+    <label class="drop" id="drop-clubs">Выбрать или перетащить clubs.csv<input type="file" accept=".csv" id="in-clubs"></label>
+  </div>
 
-        const parseDate = (dateStr) => {
-            if (!dateStr) return '';
-            const parts = String(dateStr).trim().split(/\s+/);
-            if (parts.length >= 2) {
-                let d = parseInt(parts[0], 10);
-                let m = months[parts[1].toLowerCase()] || '01';
-                let y = parts.length >= 3 ? parts[2] : '2026';
-                let dStr = d < 10 ? '0' + d : '' + d;
-                return `${dStr}.${m}.${y}`;
-            }
-            return dateStr;
-        };
+  <div class="card">
+    <h2><span class="num">2</span> Сырые файлы расширения</h2>
+    <p class="hint">Все скачанные ya_*.csv — можно сразу сотню, перетаскивайте пачкой.</p>
+    <label class="drop" id="drop-raw">Выбрать или перетащить файлы ya_*.csv<input type="file" accept=".csv" multiple id="in-raw"></label>
+    <div class="filelist" id="rawlist"></div>
+  </div>
 
-        const formatRating = (rating) => {
-            if (!rating) return '';
-            let num = parseFloat(String(rating).replace(',', '.'));
-            if (isNaN(num)) return String(rating);
-            return num.toFixed(2).replace('.', ',');
-        };
+  <div class="card">
+    <h2><span class="num">3</span> Файл памяти <span style="color:var(--dim);font-weight:400">— не нужен при самом первом запуске</span></h2>
+    <p class="hint">ya_review_ids.txt, скачанный при прошлой конвертации. Без него все отзывы считаются новыми.</p>
+    <label class="drop" id="drop-mem">Выбрать или перетащить ya_review_ids.txt<input type="file" accept=".txt" id="in-mem"></label>
+  </div>
 
-        function App() {
-            const [file, setFile] = useState(null);
-            const [clubName, setClubName] = useState('');
-            const [source, setSource] = useState('Яндекс');
-            const [encoding, setEncoding] = useState('utf-8');
-            const [isProcessing, setIsProcessing] = useState(false);
-            const [message, setMessage] = useState('');
-            const fileInputRef = useRef(null);
+  <div class="runrow">
+    <button class="run" id="btn-run" disabled>Собрать дельту</button>
+    <span class="runnote" id="runnote">Нужны справочник и хотя бы один сырой файл</span>
+  </div>
 
-            const handleFileChange = (e) => {
-                const selected = e.target.files[0];
-                if (selected) {
-                    setFile(selected);
-                    setMessage('');
-                    // Пытаемся угадать название из имени файла
-                    let guessedName = selected.name
-                        .replace('.csv', '')
-                        .replace(/_/g, ' ')
-                        .replace('YANDEXMAP', '')
-                        .trim();
-                    setClubName(`DDX Fitness, фитнес-клуб, ${guessedName}`);
-                }
-            };
+  <div class="log" id="log"></div>
 
-            const processFile = () => {
-            if (!file) {
-                setMessage({ type: 'error', text: 'Пожалуйста, выберите файл.' });
-                return;
-            }
-            setIsProcessing(true);
-            setMessage('');
+  <div class="downloads" id="downloads" style="display:none">
+    <a class="dl-delta" id="dl-delta" download>Скачать дельту для таблицы</a>
+    <a class="dl-mem" id="dl-mem" download="ya_review_ids.txt">Скачать обновлённую память</a>
+  </div>
+  <p class="memnote" id="memnote">⚠ Замените старый ya_review_ids.txt этим новым — иначе при следующей конвертации отзывы этой дельты попадут в таблицу второй раз.</p>
+</div>
 
-            Papa.parse(file, {
-                header: true,
-                skipEmptyLines: true,
-                encoding: encoding,
-                transformHeader: function(h) {
-                    return h.replace(/^\uFEFF/, '').trim(); // Удаляем скрытый символ BOM
-                },
-                complete: function(results) {
-                    try {
-                        const data = results.data;
-                        
-                        // Проверяем, правильные ли колонки мы прочитали
-                        if (data.length > 0 && !('Имя' in data[0]) && !('Отзыв' in data[0])) {
-                            // Возможно, разделитель не точка с запятой. Пробуем перепарсить
-                            Papa.parse(file, {
-                                header: true,
-                                skipEmptyLines: true,
-                                encoding: encoding,
-                                delimiter: ';',
-                                transformHeader: function(h) {
-                                    return h.replace(/^\uFEFF/, '').trim();
-                                },
-                                complete: (retryResults) => handleData(retryResults.data)
-                            });
-                        } else {
-                            handleData(data);
-                        }
-                    } catch (err) {
-                        setMessage({ type: 'error', text: 'Ошибка обработки: ' + err.message });
-                        setIsProcessing(false);
-                    }
-                },
-                error: function(err) {
-                    setMessage({ type: 'error', text: 'Ошибка чтения файла: ' + err.message });
-                    setIsProcessing(false);
-                }
-            });
-        };
+<script>
+"use strict";
+const MIN_DATE = "2025-01-01";
+const OUT_COLUMNS = ['review_id','club_id','brand','date','source','city','address','author','rating','text','link'];
 
-        const handleData = (data) => {
-            if (!data || data.length === 0) {
-                setMessage({ type: 'error', text: 'Файл пуст или не удалось распознать данные. Проверьте формат файла.' });
-                setIsProcessing(false);
-                return;
-            }
+/* ---------- SHA-256 (без внешних зависимостей и secure context) ---------- */
+function sha256hex(str){
+  const K=[0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
+  let H=[0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
+  const bytes=new TextEncoder().encode(str);
+  const l=bytes.length, bitLen=l*8;
+  const padded=new Uint8Array(((l+8)>>6<<6)+64);
+  padded.set(bytes); padded[l]=0x80;
+  const dv=new DataView(padded.buffer);
+  dv.setUint32(padded.length-4, bitLen>>>0);
+  dv.setUint32(padded.length-8, Math.floor(bitLen/4294967296));
+  const w=new Int32Array(64);
+  const rr=(x,n)=>(x>>>n)|(x<<(32-n));
+  for(let i=0;i<padded.length;i+=64){
+    for(let t=0;t<16;t++) w[t]=dv.getInt32(i+t*4);
+    for(let t=16;t<64;t++){
+      const s0=rr(w[t-15],7)^rr(w[t-15],18)^(w[t-15]>>>3);
+      const s1=rr(w[t-2],17)^rr(w[t-2],19)^(w[t-2]>>>10);
+      w[t]=(w[t-16]+s0+w[t-7]+s1)|0;
+    }
+    let [a,b,c,d,e,f,g,h]=H;
+    for(let t=0;t<64;t++){
+      const S1=rr(e,6)^rr(e,11)^rr(e,25);
+      const ch=(e&f)^(~e&g);
+      const t1=(h+S1+ch+K[t]+w[t])|0;
+      const S0=rr(a,2)^rr(a,13)^rr(a,22);
+      const mj=(a&b)^(a&c)^(b&c);
+      const t2=(S0+mj)|0;
+      h=g;g=f;f=e;e=(d+t1)|0;d=c;c=b;b=a;a=(t1+t2)|0;
+    }
+    H=[(H[0]+a)|0,(H[1]+b)|0,(H[2]+c)|0,(H[3]+d)|0,(H[4]+e)|0,(H[5]+f)|0,(H[6]+g)|0,(H[7]+h)|0];
+  }
+  return H.map(x=>(x>>>0).toString(16).padStart(8,'0')).join('');
+}
 
-            // Ищем ключи гибко, на случай непредсказуемых форматов
-            const firstRow = data[0];
-            const authorKey = 'Имя' in firstRow ? 'Имя' : ('Автор' in firstRow ? 'Автор' : Object.keys(firstRow)[0]);
-            const dateKey = 'Дата' in firstRow ? 'Дата' : ('Время' in firstRow ? 'Время' : Object.keys(firstRow)[1]);
-            const ratingKey = 'Оценка' in firstRow ? 'Оценка' : ('Рейтинг' in firstRow ? 'Рейтинг' : Object.keys(firstRow)[2]);
-            const textKey = 'Отзыв' in firstRow ? 'Отзыв' : ('Текст' in firstRow ? 'Текст' : Object.keys(firstRow)[3]);
+/* ---------- разбор CSV (RFC 4180: кавычки, запятые, переводы строк) ---------- */
+function parseCSV(text){
+  text = text.replace(/^\uFEFF/, '');
+  const rows=[]; let row=[], field='', inQ=false;
+  for(let i=0;i<text.length;i++){
+    const ch=text[i];
+    if(inQ){
+      if(ch==='"'){
+        if(text[i+1]==='"'){field+='"'; i++;}
+        else inQ=false;
+      } else field+=ch;
+    } else {
+      if(ch==='"') inQ=true;
+      else if(ch===','){row.push(field); field='';}
+      else if(ch==='\n'||ch==='\r'){
+        if(ch==='\r'&&text[i+1]==='\n') i++;
+        row.push(field); field='';
+        if(row.length>1||row[0]!=='') rows.push(row);
+        row=[];
+      } else field+=ch;
+    }
+  }
+  if(field!==''||row.length){row.push(field); if(row.length>1||row[0]!=='') rows.push(row);}
+  if(!rows.length) return [];
+  const header=rows[0].map(h=>h.trim());
+  return rows.slice(1).map(r=>{
+    const o={};
+    header.forEach((h,j)=>o[h]=(r[j]??'').trim());
+    return o;
+  });
+}
+const csvField = v => '"'+String(v??'').replace(/"/g,'""')+'"';
+const cleanSpaces = s => s ? s.replace(/\u00a0/g,' ').replace(/\s+/g,' ').trim() : s;
 
-            const transformed = data.map(row => ({
-                'ВРЕМЯ': parseDate(row[dateKey]),
-                'ИМЯ КЛУБА': clubName,
-                'РЕЙТИНГ': formatRating(row[ratingKey]),
-                'ИСТОЧНИК': source,
-                'АВТОР': row[authorKey],
-                'ТЕКСТ': row[textKey]
-            }));
+/* ---------- состояние ---------- */
+let clubsText=null, memText=null, rawFiles=[];
+const $=id=>document.getElementById(id);
 
-            // Конвертируем обратно в CSV
-            const csvOutput = Papa.unparse(transformed, {
-                    delimiter: ",", // Стандартный CSV-разделитель (запятая) для главного реестра
-                    quotes: true    // Всегда оборачиваем текст в кавычки для надежности
-                });
+function bindDrop(dropId, inputId, onFiles){
+  const drop=$(dropId), input=$(inputId);
+  drop.addEventListener('dragover',e=>{e.preventDefault(); drop.classList.add('over');});
+  drop.addEventListener('dragleave',()=>drop.classList.remove('over'));
+  drop.addEventListener('drop',e=>{e.preventDefault(); drop.classList.remove('over'); onFiles([...e.dataTransfer.files]);});
+  input.addEventListener('change',()=>onFiles([...input.files]));
+}
+function readFile(f){return new Promise((res,rej)=>{
+  const r=new FileReader();
+  r.onload=()=>res(r.result); r.onerror=()=>rej(new Error('Не удалось прочитать '+f.name));
+  r.readAsText(f,'utf-8');
+});}
+function refreshRun(){
+  const ready = clubsText!==null && rawFiles.length>0;
+  $('btn-run').disabled=!ready;
+  $('runnote').textContent = ready ? 'Готово к запуску' : 'Нужны справочник и хотя бы один сырой файл';
+}
 
-                // Добавляем BOM (\uFEFF) чтобы Excel корректно понимал кириллицу (UTF-8)
-                const blob = new Blob(["\uFEFF" + csvOutput], { type: "text/csv;charset=utf-8;" });
-                const url = URL.createObjectURL(blob);
-                
-                const link = document.createElement("a");
-                link.href = url;
-                link.setAttribute("download", `Трансформирован_${file.name}`);
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
+bindDrop('drop-clubs','in-clubs', async files=>{
+  if(!files.length) return;
+  clubsText=await readFile(files[0]);
+  $('drop-clubs').classList.add('done');
+  $('drop-clubs').firstChild.textContent='✓ '+files[0].name;
+  refreshRun();
+});
+bindDrop('drop-raw','in-raw', async files=>{
+  const csvs=files.filter(f=>f.name.toLowerCase().endsWith('.csv'));
+  for(const f of csvs) rawFiles.push({name:f.name, text:await readFile(f)});
+  $('drop-raw').classList.add('done');
+  $('drop-raw').firstChild.textContent='✓ Файлов загружено: '+rawFiles.length;
+  $('rawlist').textContent=rawFiles.map(f=>f.name).join('   ');
+  refreshRun();
+});
+bindDrop('drop-mem','in-mem', async files=>{
+  if(!files.length) return;
+  memText=await readFile(files[0]);
+  $('drop-mem').classList.add('done');
+  $('drop-mem').firstChild.textContent='✓ '+files[0].name;
+});
 
-                setIsProcessing(false);
-                setMessage({ type: 'success', text: 'Файл успешно обработан и скачан!' });
-            };
+/* ---------- конвертация ---------- */
+$('btn-run').addEventListener('click',()=>{
+  const log=$('log'); log.style.display='block'; log.innerHTML='';
+  const line=(msg,cls)=>{log.innerHTML+=(cls?`<span class="${cls}">${msg}</span>`:msg)+'\n'; log.scrollTop=log.scrollHeight;};
 
-            return (
-                <div className="max-w-3xl mx-auto py-12 px-4 sm:px-6 lg:px-8">
-                    <div className="bg-white rounded-2xl shadow-xl overflow-hidden">
-                        <div className="bg-blue-600 px-6 py-4">
-                            <h1 className="text-2xl font-bold text-white flex items-center">
-                                <i className="fas fa-file-csv mr-3"></i>
-                                Трансформатор Отзывов в Формат Реестра
-                            </h1>
-                        </div>
-                        
-                        <div className="p-8 space-y-6">
-                            {/* Блок загрузки файла */}
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700 mb-2">1. Загрузите исходный CSV файл</label>
-                                <div 
-                                    className="border-2 border-dashed border-gray-300 rounded-lg p-6 flex justify-center items-center hover:bg-gray-50 transition cursor-pointer"
-                                    onClick={() => fileInputRef.current.click()}
-                                >
-                                    <div className="text-center">
-                                        <i className="fas fa-cloud-upload-alt text-4xl text-blue-500 mb-2"></i>
-                                        <p className="text-sm text-gray-600">
-                                            {file ? <span className="font-semibold text-blue-600">{file.name}</span> : "Нажмите, чтобы выбрать CSV файл"}
-                                        </p>
-                                    </div>
-                                    <input 
-                                        type="file" 
-                                        accept=".csv" 
-                                        className="hidden" 
-                                        ref={fileInputRef}
-                                        onChange={handleFileChange}
-                                    />
-                                </div>
-                            </div>
+  // справочник: цифры org_id -> данные клуба
+  const clubMap={};
+  for(const row of parseCSV(clubsText)){
+    const ya=(row['yandex_org_id']||'').replace(/^ya_/,'').trim();
+    if(ya && (row['club_id']||'').trim()){
+      clubMap[ya]={club_id:row['club_id'].trim(), brand:cleanSpaces(row['brand']||''),
+                   city:cleanSpaces(row['city']||''), address:cleanSpaces(row['address']||'')};
+    }
+  }
+  line('Справочник: клубов с yandex_org_id — '+Object.keys(clubMap).length, Object.keys(clubMap).length? 'ok':'warn');
 
-                            {/* Настройки */}
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                <div className="md:col-span-2">
-                                    <label className="block text-sm font-medium text-gray-700 mb-2">2. Уточните название клуба (пойдет во все строки)</label>
-                                    <input 
-                                        type="text" 
-                                        value={clubName}
-                                        onChange={(e) => setClubName(e.target.value)}
-                                        className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                                        placeholder="Например: DDX Fitness, фитнес-клуб, Гражданский проспект, 41"
-                                    />
-                                </div>
+  const existing=new Set((memText||'').split(/\r?\n/).map(s=>s.trim()).filter(Boolean));
+  line('Память: известных отзывов — '+existing.size);
 
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-2">3. Источник отзывов</label>
-                                    <select 
-                                        value={source}
-                                        onChange={(e) => setSource(e.target.value)}
-                                        className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                                    >
-                                        <option value="Яндекс">Яндекс Карты</option>
-                                        <option value="2ГИС">2ГИС</option>
-                                        <option value="Google">Google Карты</option>
-                                        <option value="Телеграм">Телеграм</option>
-                                    </select>
-                                </div>
+  const outRows=[], newIds=[], missing=new Set();
+  let total=0, dup=0, old=0;
 
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-2">Кодировка файла (если кракозябры)</label>
-                                    <select 
-                                        value={encoding}
-                                        onChange={(e) => setEncoding(e.target.value)}
-                                        className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                                    >
-                                        <option value="utf-8">UTF-8 (Стандарт)</option>
-                                        <option value="windows-1251">Windows-1251 (Старый Excel)</option>
-                                    </select>
-                                </div>
-                            </div>
+  for(const f of rawFiles){
+    for(const r of parseCSV(f.text)){
+      const org=(r['org_id']||'').trim();
+      if(!org) continue;
+      total++;
+      const author=cleanSpaces(r['author']||'')||'Аноним';
+      const date=(r['date']||'').trim();
+      const text=(r['text']||'').trim();
+      const rating=(r['rating']||'').trim().replace(',','.');
 
-                            {message && (
-                                <div className={`p-4 rounded-lg flex items-center ${message.type === 'error' ? 'bg-red-50 text-red-700' : 'bg-green-50 text-green-700'}`}>
-                                    <i className={`fas ${message.type === 'error' ? 'fa-exclamation-circle' : 'fa-check-circle'} mr-2`}></i>
-                                    {message.text}
-                                </div>
-                            )}
+      if(date && date.slice(0,10)<MIN_DATE){old++; continue;}
 
-                            <button 
-                                onClick={processFile}
-                                disabled={!file || isProcessing}
-                                className={`w-full py-3 px-4 text-white font-bold rounded-lg shadow-md transition-colors flex justify-center items-center ${!file || isProcessing ? 'bg-blue-300 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}
-                            >
-                                {isProcessing ? (
-                                    <><i className="fas fa-spinner fa-spin mr-2"></i> Обработка...</>
-                                ) : (
-                                    <><i className="fas fa-download mr-2"></i> Трансформировать и Скачать</>
-                                )}
-                            </button>
-                        </div>
-                    </div>
-                    
-                    <p className="text-center text-gray-500 mt-6 text-sm">
-                        Разработано Атлантидой. Файлы обрабатываются локально в вашем браузере.
-                    </p>
-                </div>
-            );
-        }
+      const rid='ya_'+sha256hex(`${org}|${author}|${date}|${text.slice(0,200)}`).slice(0,16);
+      if(existing.has(rid)){dup++; continue;}
+      existing.add(rid);
 
-        const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<App />);
-    </script>
+      let club=clubMap[org];
+      if(!club){missing.add(org); club={club_id:'ya_'+org, brand:'Неизвестно', city:'Неизвестно', address:''};}
+
+      outRows.push([rid, club.club_id, club.brand, date, 'Яндекс',
+                    club.city, club.address, author, rating,
+                    text.replace(/\r?\n/g,' '), (r['link']||'').trim()]);
+      newIds.push(rid);
+    }
+  }
+
+  for(const org of [...missing].sort())
+    line('⚠ Организация ya_'+org+' отсутствует в справочнике (колонка yandex_org_id)!','warn');
+
+  const set=(id,v,lit)=>{const el=$(id); el.querySelector('.val').textContent=v; el.classList.toggle('lit',!!lit);};
+  set('st-raw',total); set('st-new',outRows.length,outRows.length>0); set('st-dup',dup); set('st-old',old);
+
+  if(!outRows.length){
+    line('Новых отзывов нет — дельта не нужна.','ok');
+    $('downloads').style.display='none'; $('memnote').style.display='none';
+    return;
+  }
+
+  // дельта
+  const csv=OUT_COLUMNS.join(',')+'\r\n'+outRows.map(r=>r.map(csvField).join(',')).join('\r\n');
+  const now=new Date(), p=n=>String(n).padStart(2,'0');
+  const stamp=`${now.getFullYear()}${p(now.getMonth()+1)}${p(now.getDate())}_${p(now.getHours())}${p(now.getMinutes())}`;
+  const dl=$('dl-delta');
+  dl.href=URL.createObjectURL(new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8'}));
+  dl.download=`reviews_yandex_${stamp}.csv`;
+  dl.textContent=`Скачать дельту (${outRows.length} отзывов)`;
+
+  // обновлённая память = старые id + новые
+  const mem=[...existing].join('\n')+'\n';
+  $('dl-mem').href=URL.createObjectURL(new Blob([mem],{type:'text/plain;charset=utf-8'}));
+
+  $('downloads').style.display='flex';
+  $('memnote').style.display='block';
+  line(`✅ Готово: новых отзывов — ${outRows.length}, дублей отсечено — ${dup}, старше 2025 — ${old}.`,'ok');
+  line('Скачайте оба файла: дельту — в таблицу, память — на замену старой.');
+});
+</script>
 </body>
 </html>
