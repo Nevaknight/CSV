@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Конвертер отзывов Яндекс Карт → дельта</title>
+<title>Конвертер Яндекс Карт → CSV для Google Таблиц</title>
 <style>
   :root{
     --bg:#171a1e; --panel:#1f242a; --panel2:#242a31; --line:#323a43;
@@ -21,7 +21,7 @@
   header{margin-bottom:28px}
   .eyebrow{font-family:var(--mono); font-size:12px; letter-spacing:.14em; color:var(--accent); text-transform:uppercase}
   h1{font-size:26px; font-weight:650; margin-top:6px}
-  .sub{color:var(--dim); margin-top:6px; max-width:60ch}
+  .sub{color:var(--dim); margin-top:6px}
 
   /* лента этапов конвейера */
   .pipeline{display:flex; align-items:stretch; gap:0; margin:26px 0 18px; font-family:var(--mono); font-size:12px}
@@ -43,12 +43,14 @@
   }
   .hint{color:var(--dim); font-size:13px; margin:6px 0 12px}
   .drop{
+    display:block;
     border:1.5px dashed var(--line); border-radius:6px; background:var(--panel2);
     padding:16px; text-align:center; color:var(--dim); cursor:pointer; font-size:14px;
     transition:border-color .15s,color .15s;
   }
   .drop:hover,.drop.over{border-color:var(--accent); color:var(--text)}
   .drop.done{border-style:solid; border-color:var(--ok); color:var(--ok)}
+  .drop.err{border-style:solid; border-color:var(--err); color:var(--err)}
   .drop input{display:none}
   .filelist{font-family:var(--mono); font-size:12px; color:var(--dim); margin-top:8px; max-height:96px; overflow:auto}
 
@@ -59,6 +61,11 @@
   }
   button.run:hover{filter:brightness(1.08)}
   button.run:disabled{background:var(--line); color:var(--dim); cursor:not-allowed}
+  button.reset{
+    background:transparent; color:var(--dim); border:1px solid var(--line); border-radius:6px;
+    font:600 15px system-ui; padding:12px 20px; cursor:pointer;
+  }
+  button.reset:hover{border-color:var(--dim); color:var(--text)}
   .runnote{color:var(--dim); font-size:13px}
 
   .log{
@@ -83,7 +90,7 @@
 <div class="wrap">
   <header>
     <div class="eyebrow">DDX · аналитика отзывов</div>
-    <h1>Конвертер Яндекс Карт → дельта для таблицы</h1>
+    <h1>Конвертер Яндекс Карт → CSV для Google Таблиц</h1>
     <p class="sub">Работает целиком в браузере, данные никуда не отправляются. Повторная обработка одних и тех же файлов безопасна: дубли отсекаются по файлу памяти.</p>
   </header>
 
@@ -97,24 +104,25 @@
   <div class="card">
     <h2><span class="num">1</span> Справочник клубов</h2>
     <p class="hint">Экспорт таблицы clubs в CSV. Клубы сопоставляются по колонке yandex_org_id.</p>
-    <label class="drop" id="drop-clubs">Выбрать или перетащить clubs.csv<input type="file" accept=".csv" id="in-clubs"></label>
+    <label class="drop" id="drop-clubs"><span class="dlabel">Выбрать или перетащить clubs.csv</span><input type="file" accept=".csv" id="in-clubs"></label>
   </div>
 
   <div class="card">
     <h2><span class="num">2</span> Сырые файлы расширения</h2>
     <p class="hint">Все скачанные ya_*.csv — можно сразу сотню, перетаскивайте пачкой.</p>
-    <label class="drop" id="drop-raw">Выбрать или перетащить файлы ya_*.csv<input type="file" accept=".csv" multiple id="in-raw"></label>
+    <label class="drop" id="drop-raw"><span class="dlabel">Выбрать или перетащить файлы ya_*.csv</span><input type="file" accept=".csv" multiple id="in-raw"></label>
     <div class="filelist" id="rawlist"></div>
   </div>
 
   <div class="card">
     <h2><span class="num">3</span> Файл памяти <span style="color:var(--dim);font-weight:400">— не нужен при самом первом запуске</span></h2>
     <p class="hint">ya_review_ids.txt, скачанный при прошлой конвертации. Без него все отзывы считаются новыми.</p>
-    <label class="drop" id="drop-mem">Выбрать или перетащить ya_review_ids.txt<input type="file" accept=".txt" id="in-mem"></label>
+    <label class="drop" id="drop-mem"><span class="dlabel">Выбрать или перетащить ya_review_ids.txt</span><input type="file" accept=".txt" id="in-mem"></label>
   </div>
 
   <div class="runrow">
     <button class="run" id="btn-run" disabled>Собрать дельту</button>
+    <button class="reset" id="btn-reset">Сбросить</button>
     <span class="runnote" id="runnote">Нужны справочник и хотя бы один сырой файл</span>
   </div>
 
@@ -230,27 +238,52 @@ function refreshRun(){
   $('runnote').textContent = ready ? 'Готово к запуску' : 'Нужны справочник и хотя бы один сырой файл';
 }
 
+function setDrop(dropId, state, text){
+  const d=$(dropId);
+  d.classList.remove('done','err');
+  if(state) d.classList.add(state);
+  d.querySelector('.dlabel').textContent=text;
+}
+
 bindDrop('drop-clubs','in-clubs', async files=>{
   if(!files.length) return;
-  clubsText=await readFile(files[0]);
-  $('drop-clubs').classList.add('done');
-  $('drop-clubs').firstChild.textContent='✓ '+files[0].name;
+  const text=await readFile(files[0]);
+  const rows=parseCSV(text);
+  // Валидация: это должен быть экспорт справочника clubs
+  if(!rows.length || !('club_id' in rows[0]) || !('yandex_org_id' in rows[0])){
+    clubsText=null;
+    setDrop('drop-clubs','err','✗ '+files[0].name+' — это не справочник (нет колонок club_id / yandex_org_id)');
+    refreshRun(); return;
+  }
+  clubsText=text;
+  setDrop('drop-clubs','done','✓ '+files[0].name);
   refreshRun();
 });
 bindDrop('drop-raw','in-raw', async files=>{
-  const csvs=files.filter(f=>f.name.toLowerCase().endsWith('.csv'));
-  for(const f of csvs) rawFiles.push({name:f.name, text:await readFile(f)});
-  $('drop-raw').classList.add('done');
-  $('drop-raw').firstChild.textContent='✓ Файлов загружено: '+rawFiles.length;
-  $('rawlist').textContent=rawFiles.map(f=>f.name).join('   ');
+  const rejected=[];
+  for(const f of files.filter(f=>f.name.toLowerCase().endsWith('.csv'))){
+    const text=await readFile(f);
+    const rows=parseCSV(text);
+    // Валидация: сырой файл нового расширения содержит колонку org_id
+    if(!rows.length || !('org_id' in rows[0])){ rejected.push(f.name); continue; }
+    rawFiles.push({name:f.name, text});
+  }
+  if(rawFiles.length){
+    setDrop('drop-raw','done','✓ Файлов загружено: '+rawFiles.length);
+  } else if(rejected.length){
+    setDrop('drop-raw','err','✗ Файлы не подходят (нет колонки org_id — скачаны старой версией расширения?)');
+  }
+  $('rawlist').textContent = rawFiles.map(f=>f.name).join('   ')
+    + (rejected.length ? '\n✗ отклонено: '+rejected.join('   ') : '');
   refreshRun();
 });
 bindDrop('drop-mem','in-mem', async files=>{
   if(!files.length) return;
   memText=await readFile(files[0]);
-  $('drop-mem').classList.add('done');
-  $('drop-mem').firstChild.textContent='✓ '+files[0].name;
+  setDrop('drop-mem','done','✓ '+files[0].name);
 });
+
+$('btn-reset').addEventListener('click',()=>location.reload());
 
 /* ---------- конвертация ---------- */
 $('btn-run').addEventListener('click',()=>{
